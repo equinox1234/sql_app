@@ -104,7 +104,7 @@ if user_question:
     st.session_state.chat_history.append({"role": "user", "content": user_question})
 
     # 组装超级大脑 (Agent)
-    llm = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
+    llm = ChatOpenAI(api_key=api_key, base_url=base_url, model="deepseek-ai/DeepSeek-V3", temperature=0)
     agent_executor = create_sql_agent(llm=llm, db=db, agent_type="tool-calling", verbose=True)
 
     # 强力 Prompt 注入
@@ -181,5 +181,6 @@ if user_question:
                 st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
             except Exception as e:
                 st.error(f"分析失败: {e}")
+
 
 
