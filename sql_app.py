@@ -2,6 +2,8 @@ import streamlit as st
 import os
 import sqlite3
 import pandas as pd
+import json  # <--- 新增
+import re    # <--- 新增
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain_community.agent_toolkits import create_sql_agent
@@ -105,7 +107,56 @@ if user_question:
     agent_executor = create_sql_agent(llm=llm, db=db, agent_type="tool-calling", verbose=True)
 
     # 强力 Prompt 注入
-    augmented_question = f"{user_question}\n\n(系统指令：请必须使用中文，以专业的数据分析师口吻向业务人员汇报结果。直接给出最终答案，不要展示SQL语句。)"
+   # 🌟 强力 Prompt 注入：教会 Agent 按格式输出 JSON 🌟
+    augmented_question = f"""
+    {user_question}
+
+    (系统强制指令：
+    1. 请必须使用中文，以专业的数据分析师口吻向业务人员汇报结果。不要展示 SQL 语句。
+    2. 如果用户的提问中包含“画图”、“图表”、“柱状图”、“折线图”、“统计图”等字眼，请你在文字汇报的最后，严格附加一段 Markdown 格式的 JSON 数据，用于前端画图。
+    3. JSON 格式必须完全如下所示，键名必须是 "labels" 和 "values"：
+    ```json
+    {{"labels": ["类别A", "类别B"], "values": [10, 20]}}
+    ```
+    )
+    """
+
+    with st.chat_message("assistant"):
+        with st.spinner("🤖 Agent 正在深度分析数据并绘制图表，请稍候..."):
+            try:
+                response = agent_executor.invoke({"input": augmented_question})
+                ai_answer = response["output"]
+                
+                # 1. 打印 Agent 的文字汇报
+                st.markdown(ai_answer)
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
+
+                # 🌟 2. 前端拦截器：解析 JSON 并画图 🌟
+                # 使用正则表达式提取大模型输出的 JSON 块
+                json_match = re.search(r'```json\n(.*?)\n```', ai_answer, re.DOTALL)
+                
+                if json_match:
+                    try:
+                        # 把文本转化成 Python 字典
+                        chart_data = json.loads(json_match.group(1))
+                        
+                        # 把字典转化成 pandas 数据表，喂给 Streamlit 画图
+                        df_chart = pd.DataFrame(
+                            {"数值": chart_data["values"]}, 
+                            index=chart_data["labels"]
+                        )
+                        
+                        st.divider() # 画一条分割线
+                        st.subheader("📊 数据可视化视图")
+                        
+                        # 调用 Streamlit 原生柱状图组件进行渲染！
+                        st.bar_chart(df_chart)
+                        
+                    except Exception as parse_error:
+                        st.warning(f"⚠️ 图表渲染解析失败，这可能是大模型生成的格式有误。")
+
+            except Exception as e:
+                st.error(f"分析失败: {e}")
 
     with st.chat_message("assistant"):
         with st.spinner("🤖 Agent 正在探索数据库并执行查询，请稍候..."):
@@ -116,3 +167,4 @@ if user_question:
                 st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
             except Exception as e:
                 st.error(f"分析失败: {e}")
+
