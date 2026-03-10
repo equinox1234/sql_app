@@ -108,82 +108,49 @@ if user_question:
     agent_executor = create_sql_agent(llm=llm, db=db, agent_type="tool-calling", verbose=True)
 
     # 强力 Prompt 注入
-   # 🌟 强力 Prompt 注入：教会 Agent 按格式输出 JSON 🌟
+ # 🌟 智能 Prompt 注入：赋予 Agent 选择图表类型的权力 🌟
     augmented_question = f"""
     {user_question}
 
-    (系统强制指令：
-    1. 请必须使用中文，以专业的数据分析师口吻向业务人员汇报结果。不要展示 SQL 语句。
-    2. 如果用户的提问中包含“画图”、“图表”、“柱状图”、“折线图”、“统计图”等字眼，请你在文字汇报的最后，严格附加一段 Markdown 格式的 JSON 数据，用于前端画图。
-    3. JSON 格式必须完全如下所示，键名必须是 "labels" 和 "values"：
+    (系统指令：
+    1. 请必须使用中文回答，不要展示 SQL。
+    2. 如果用户要求画图，请根据需求选择最合适的 type ("bar" 或 "line")。
+    3. 必须在回复最后附加如下格式的 JSON（不要解释，直接放代码块）：
     ```json
-    {{"labels": ["类别A", "类别B"], "values": [10, 20]}}
+    {{"type": "line", "labels": ["A", "B"], "values": [10, 20]}}
     ```
     )
     """
 
     with st.chat_message("assistant"):
-        with st.spinner("🤖 Agent 正在深度分析数据并绘制图表，请稍候..."):
+        with st.spinner("🤖 正在进行多维度数据分析..."):
             try:
                 response = agent_executor.invoke({"input": augmented_question})
                 ai_answer = response["output"]
-
-                # 🌟 终极抛光：用正则表达式把 JSON 代码块从文字回复中“无痕擦除” 🌟
-                clean_answer = re.sub(r'```json\n.*?\n```', '', ai_answer, flags=re.DOTALL)
-                # 再顺手把诸如“以下是JSON数据”这种多余的过渡句也删掉
-                clean_answer = re.sub(r'以下.*?JSON数据.*?[：:]', '', clean_answer)
                 
-                # 1. 打印 Agent 的文字汇报
-                st.markdown(ai_answer)
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
+                # 🌟 1. 无痕擦除：把所有 JSON 和多余的提示语都删掉 🌟
+                clean_answer = re.sub(r'```json\n.*?\n```', '', ai_answer, flags=re.DOTALL)
+                clean_answer = re.sub(r'以下.*?JSON.*?[:：]', '', clean_answer)
+                st.markdown(clean_answer.strip())
+                st.session_state.chat_history.append({"role": "assistant", "content": clean_answer.strip()})
 
-                # 🌟 2. 前端拦截器：解析 JSON 并画图 🌟
-                # 使用正则表达式提取大模型输出的 JSON 块
+                # 🌟 2. 动态渲染：根据 Agent 的建议选择画柱子还是画曲线 🌟
                 json_match = re.search(r'```json\n(.*?)\n```', ai_answer, re.DOTALL)
-
                 if json_match:
-                    try:
-                        chart_data = json.loads(json_match.group(1))
-                        
-                        # 1. 组装成更规范的 Pandas 表格
-                        df_chart = pd.DataFrame({
-                            "分析维度": chart_data["labels"],
-                            "统计数值": chart_data["values"]
-                        })
-                        
-                        st.divider()
-                        st.subheader("📊 智能数据可视化分析")
-                        
-                        # 2. 召唤 Plotly 画高级图表！
-                        fig = px.bar(
-                            df_chart, 
-                            x="分析维度", 
-                            y="统计数值", 
-                            color="分析维度",      # 自动给不同柱子分配高级配色！
-                            text_auto='.2f',      # 把具体数字直接显示在柱子上（保留两位小数）！
-                            template="plotly_dark" # 契合你当前黑色背景的高级暗黑主题
-                        )
-                        
-                        # 3. 隐藏多余的图例，让画面更干净
-                        fig.update_layout(showlegend=False)
-                        
-                        # 4. 用 Streamlit 的高精度模式渲染 Plotly 图表
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                    except Exception as parse_error:
-                        st.warning(f"⚠️ 图表渲染解析失败: {parse_error}")
+                    chart_data = json.loads(json_match.group(1))
+                    df_chart = pd.DataFrame({"维度": chart_data["labels"], "数值": chart_data["values"]})
+                    
+                    st.divider()
+                    chart_type = chart_data.get("type", "bar") # 默认为柱状图
+                    
+                    if chart_type == "line":
+                        fig = px.line(df_chart, x="维度", y="数值", markers=True, text="数值", template="plotly_dark", title="📈 趋势曲线视图")
+                    else:
+                        fig = px.bar(df_chart, x="维度", y="数值", color="维度", text_auto='.2f', template="plotly_dark", title="📊 分类统计视图")
+                    
+                    fig.update_traces(textposition='top center')
+                    st.plotly_chart(fig, use_container_width=True)
 
-
-            except Exception as e:
-                st.error(f"分析失败: {e}")
-
-    with st.chat_message("assistant"):
-        with st.spinner("🤖 Agent 正在探索数据库并执行查询，请稍候..."):
-            try:
-                response = agent_executor.invoke({"input": augmented_question})
-                ai_answer = response["output"]
-                st.markdown(ai_answer)
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
             except Exception as e:
                 st.error(f"分析失败: {e}")
 
