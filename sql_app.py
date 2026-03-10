@@ -97,7 +97,7 @@ if user_question:
             st.caption(f"🎯 路由锁定：`{relevant_tables}`")
 
         with st.spinner("🤖 正在结合历史对话深度思考..."):
-            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
+            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="deepseek-ai/DeepSeek-V3", temperature=0)
             
             # 移除了脆弱的 memory 模块
             agent_executor = create_sql_agent(
@@ -156,3 +156,4 @@ if user_question:
 
             except Exception as e:
                 st.error(f"分析出错: {e}")
+
