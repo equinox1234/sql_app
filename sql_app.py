@@ -127,6 +127,11 @@ if user_question:
             try:
                 response = agent_executor.invoke({"input": augmented_question})
                 ai_answer = response["output"]
+
+                # 🌟 终极抛光：用正则表达式把 JSON 代码块从文字回复中“无痕擦除” 🌟
+                clean_answer = re.sub(r'```json\n.*?\n```', '', ai_answer, flags=re.DOTALL)
+                # 再顺手把诸如“以下是JSON数据”这种多余的过渡句也删掉
+                clean_answer = re.sub(r'以下.*?JSON数据.*?[：:]', '', clean_answer)
                 
                 # 1. 打印 Agent 的文字汇报
                 st.markdown(ai_answer)
@@ -181,6 +186,7 @@ if user_question:
                 st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
             except Exception as e:
                 st.error(f"分析失败: {e}")
+
 
 
 
