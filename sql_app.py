@@ -4,6 +4,8 @@ import sqlite3
 import pandas as pd
 import json
 import re
+from langchain.memory import ConversationBufferMemory
+from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 import plotly.express as px
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
@@ -84,65 +86,92 @@ for msg in st.session_state.chat_history:
 user_question = st.chat_input("例如：帮我画一个折线图，展示各车型的平均电池温度。")
 
 if user_question:
-    if not api_key:
-        st.error("⚠️ 请在左侧配置 API Key！")
-        st.stop()
+    # --- 步骤 0: 初始化持久化记忆存储 ---
+# 这会让 Agent 记住之前的对话，即使是在执行 SQL 时
+msgs = StreamlitChatMessageHistory(key="langchain_messages")
+memory = ConversationBufferMemory(
+    chat_memory=msgs, 
+    return_messages=True, 
+    memory_key="chat_history", 
+    output_key="output" # 必须指定，因为 SQL Agent 有多个输出键
+)
 
-    with st.chat_message("user"):
-        st.markdown(user_question)
-    st.session_state.chat_history.append({"role": "user", "content": user_question})
+# 渲染历史聊天记录
+for msg in msgs.messages:
+    st.chat_message(msg.type).write(msg.content)
 
-    # --- 步骤 1: 语义路由 (锁定相关表) ---
+if user_question:
+    # --- 步骤 0: 初始化持久化记忆存储 ---
+# 这会让 Agent 记住之前的对话，即使是在执行 SQL 时
+msgs = StreamlitChatMessageHistory(key="langchain_messages")
+memory = ConversationBufferMemory(
+    chat_memory=msgs, 
+    return_messages=True, 
+    memory_key="chat_history", 
+    output_key="output" # 必须指定，因为 SQL Agent 有多个输出键
+)
+
+# 渲染历史聊天记录
+for msg in msgs.messages:
+    st.chat_message(msg.type).write(msg.content)
+
+if user_question:
+    # 用户输入展示（msgs 会自动处理存储）
+    st.chat_message("user").write(user_question)
+
+    # --- 步骤 1: 语义路由 (路由不需要记忆，保持纯净) ---
     with st.chat_message("assistant"):
         with st.spinner("🔍 正在扫描业务表结构..."):
             router_llm = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-7B-Instruct", temperature=0)
-            routing_prompt = f"你是一个路由专家。数据库有表: vehicles (型号, vin), test_logs (温度, 转速, 结果)。用户问题: {user_question}。请只输出需要的表名，用逗号隔开。"
+            routing_prompt = f"当前有表: vehicles, test_logs。用户问题: {user_question}。请只输出需要的表名。"
             relevant_tables = router_llm.invoke(routing_prompt).content.strip()
             st.caption(f"🎯 路由锁定：`{relevant_tables}`")
 
-        # --- 步骤 2: 满血 Agent 执行 ---
-        with st.spinner("🤖 正在生成分析报告与可视化视图..."):
+        # --- 步骤 2: 满血 Agent 执行 (带记忆插件) ---
+        with st.spinner("🤖 正在思考上下文并分析数据..."):
             llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
-            agent_executor = create_sql_agent(llm=llm_main, db=db, agent_type="tool-calling", verbose=True)
+            
+            # 🌟 关键点：将 memory 传入 Agent
+            agent_executor = create_sql_agent(
+                llm=llm_main, 
+                db=db, 
+                agent_type="tool-calling", 
+                verbose=True,
+                memory=memory, # <--- 记忆插件注入！
+                handle_parsing_errors=True
+            )
 
             final_prompt = f"""
             用户问题: {user_question}
-            参考表: {relevant_tables}
+            当前参考表: {relevant_tables}
             
             指令:
-            1. 中文汇报结果，禁止展示 SQL。
-            2. 若需绘图，必须在回复末尾附带如下格式 JSON 代码块：
-            ```json
-            {{"type": "line", "labels": ["A", "B"], "values": [10, 20]}}
-            ```
+            1. 中文汇报。若是对上文的追问（如“那M7呢？”），请结合历史 context 生成 SQL。
+            2. 若需绘图，末尾附带 JSON：```json {{"type": "line/bar", "labels": [], "values": []}} ```
             """
 
             try:
+                # 执行并存入记忆
                 response = agent_executor.invoke({"input": final_prompt})
                 full_res = response["output"]
 
-                # --- 步骤 3: 结果清洗 (抹除 JSON 痕迹) ---
+                # --- 步骤 3: 结果清洗与展示 ---
                 clean_text = re.sub(r'```json\n(.*?)\n```', '', full_res, flags=re.DOTALL)
                 clean_text = re.sub(r'以下.*?JSON数据.*?[：:]', '', clean_text).strip()
                 
                 st.markdown(clean_text)
-                st.session_state.chat_history.append({"role": "assistant", "content": clean_text})
+                # 注意：StreamlitChatMessageHistory 会在执行过程中自动记录对话，无需手动 append
 
-                # --- 步骤 4: 动态图表渲染 ---
+                # --- 步骤 4: 动态图表渲染 (保持不变) ---
                 json_match = re.search(r'```json\n(.*?)\n```', full_res, re.DOTALL)
                 if json_match:
                     data = json.loads(json_match.group(1))
                     df_plot = pd.DataFrame({"维度": data["labels"], "数值": data["values"]})
-                    chart_type = data.get("type", "bar")
-                    
                     st.divider()
-                    if chart_type == "line":
-                        fig = px.line(df_plot, x="维度", y="数值", markers=True, text="数值", template="plotly_dark", title="📈 趋势曲线图")
-                    else:
-                        fig = px.bar(df_plot, x="维度", y="数值", color="维度", text_auto='.2f', template="plotly_dark", title="📊 分类统计图")
-                    
-                    fig.update_traces(textposition='top center')
+                    fig = px.line(df_plot, x="维度", y="数值", markers=True) if data.get("type") == "line" else px.bar(df_plot, x="维度", y="数值", color="维度")
+                    fig.update_layout(template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
             except Exception as e:
                 st.error(f"分析出错: {e}")
+
