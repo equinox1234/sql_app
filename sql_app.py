@@ -109,7 +109,7 @@ if user_question:
 
         # 3. 满血 Agent 执行 (带记忆)
         with st.spinner("🤖 正在思考上下文并分析数据..."):
-            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
+            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="deepseek-ai/DeepSeek-V3, temperature=0)
             agent_executor = create_sql_agent(
                 llm=llm_main, 
                 db=db, 
@@ -153,3 +153,4 @@ if user_question:
 
             except Exception as e:
                 st.error(f"分析出错: {e}")
+
