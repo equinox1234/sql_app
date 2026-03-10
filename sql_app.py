@@ -8,15 +8,13 @@ import plotly.express as px
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain_community.agent_toolkits import create_sql_agent
-from langchain.memory import ConversationBufferMemory
-from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 
 # ==========================================
 # 0. 页面配置与 UI 设计
 # ==========================================
 st.set_page_config(page_title="车联网数据分析 Agent", page_icon="🚗", layout="wide")
 st.title("🚗 问界智造 - 车联网与产线数据分析 Agent")
-st.markdown("支持 **多轮对话记忆**、**语义路由** 与 **动态可视化**。可直接提问或上传 CSV 业务表。")
+st.markdown("支持 **原生级多轮对话记忆**、**语义路由** 与 **动态可视化**。可直接提问或上传 CSV 业务表。")
 
 # ==========================================
 # 1. 侧边栏：配置与数据导入
@@ -41,14 +39,13 @@ with st.sidebar:
         except Exception as e:
             st.error(f"导入失败: {e}")
 
-# 智能选择 Key
 if user_key:
     api_key = user_key
 else:
     api_key = st.secrets.get("SILICONFLOW_API_KEY", "")
 
 # ==========================================
-# 2. 数据库与记忆初始化
+# 2. 数据库初始化
 # ==========================================
 def ensure_database_exists():
     if not os.path.exists("car_data.db"):
@@ -73,21 +70,15 @@ def get_db_connection():
 
 db = get_db_connection()
 
-# 🌟 初始化记忆模块 🌟
-msgs = StreamlitChatMessageHistory(key="langchain_messages")
-memory = ConversationBufferMemory(
-    chat_memory=msgs, 
-    return_messages=True, 
-    memory_key="chat_history", 
-    output_key="output"
-)
+# ==========================================
+# 3. 聊天交互逻辑 (原生记忆版)
+# ==========================================
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# ==========================================
-# 3. 聊天交互逻辑
-# ==========================================
-# 渲染历史记录
-for msg in msgs.messages:
-    st.chat_message(msg.type).write(msg.content)
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 user_question = st.chat_input("例如：帮我查一下各车型的平均电池温度，并画个图。")
 
@@ -96,10 +87,8 @@ if user_question:
         st.error("⚠️ 请在左侧配置 API Key！")
         st.stop()
 
-    # 1. 展示用户问题
     st.chat_message("user").write(user_question)
 
-    # 2. 语义路由 (锁定相关表)
     with st.chat_message("assistant"):
         with st.spinner("🔍 扫描业务表..."):
             router_llm = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-7B-Instruct", temperature=0)
@@ -107,38 +96,52 @@ if user_question:
             relevant_tables = router_llm.invoke(routing_prompt).content.strip()
             st.caption(f"🎯 路由锁定：`{relevant_tables}`")
 
-        # 3. 满血 Agent 执行 (带记忆)
-        with st.spinner("🤖 正在思考上下文并分析数据..."):
-            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="deepseek-ai/DeepSeek-V3", temperature=0)
+        with st.spinner("🤖 正在结合历史对话深度思考..."):
+            llm_main = ChatOpenAI(api_key=api_key, base_url=base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
+            
+            # 移除了脆弱的 memory 模块
             agent_executor = create_sql_agent(
                 llm=llm_main, 
                 db=db, 
                 agent_type="tool-calling", 
                 verbose=True,
-                memory=memory, 
                 handle_parsing_errors=True
             )
 
+            # 🌟 硬核操作：手动提取最后 4 条聊天记录拼接成记忆字符串 🌟
+            history_context = ""
+            if len(st.session_state.chat_history) > 0:
+                history_list = [f"{m['role']}: {m['content']}" for m in st.session_state.chat_history[-4:]]
+                history_context = "\n".join(history_list)
+
+            # 🌟 将记忆字符串直接注入 Prompt 🌟
             final_prompt = f"""
-            用户问题: {user_question}
-            参考表: {relevant_tables}
+            【历史对话上下文】:
+            {history_context if history_context else "这是第一轮对话，无历史上下文。"}
+
+            【当前用户问题】: {user_question}
+            【当前可用参考表】: {relevant_tables}
             
-            指令:
-            1. 中文汇报结果，严禁展示 SQL。
-            2. 若涉及画图，结尾附带 JSON：```json {{"type": "line/bar", "labels": [], "values": []}} ```
-            3. 若是追问（如“那M7呢”），请结合历史对话理解。
+            【系统强制指令】:
+            1. 请必须结合上述【历史对话上下文】来理解用户的【当前问题】（比如遇到“那M7呢”这种追问时，要知道上下文在聊什么）。
+            2. 中文汇报结果，严禁展示 SQL。
+            3. 若涉及画图，结尾附带 JSON：```json {{"type": "line/bar", "labels": [], "values": []}} ```
             """
 
             try:
                 response = agent_executor.invoke({"input": final_prompt})
                 full_res = response["output"]
 
-                # 4. 结果清洗 (抹除 JSON 痕迹)
+                # 记录用户提问到列表 (放在请求成功后，防止脏数据)
+                st.session_state.chat_history.append({"role": "user", "content": user_question})
+
                 clean_text = re.sub(r'```json\n(.*?)\n```', '', full_res, flags=re.DOTALL)
                 clean_text = re.sub(r'以下.*?JSON数据.*?[：:]', '', clean_text).strip()
                 st.markdown(clean_text)
+                
+                # 记录 AI 回复到列表
+                st.session_state.chat_history.append({"role": "assistant", "content": clean_text})
 
-                # 5. 动态图表渲染
                 json_match = re.search(r'```json\n(.*?)\n```', full_res, re.DOTALL)
                 if json_match:
                     data = json.loads(json_match.group(1))
@@ -153,5 +156,3 @@ if user_question:
 
             except Exception as e:
                 st.error(f"分析出错: {e}")
-
-
