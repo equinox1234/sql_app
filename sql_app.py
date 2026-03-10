@@ -4,6 +4,7 @@ import sqlite3
 import pandas as pd
 import json  # <--- 新增
 import re    # <--- 新增
+import plotly.express as px
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain_community.agent_toolkits import create_sql_agent
@@ -134,26 +135,39 @@ if user_question:
                 # 🌟 2. 前端拦截器：解析 JSON 并画图 🌟
                 # 使用正则表达式提取大模型输出的 JSON 块
                 json_match = re.search(r'```json\n(.*?)\n```', ai_answer, re.DOTALL)
-                
+
                 if json_match:
                     try:
-                        # 把文本转化成 Python 字典
                         chart_data = json.loads(json_match.group(1))
                         
-                        # 把字典转化成 pandas 数据表，喂给 Streamlit 画图
-                        df_chart = pd.DataFrame(
-                            {"数值": chart_data["values"]}, 
-                            index=chart_data["labels"]
+                        # 1. 组装成更规范的 Pandas 表格
+                        df_chart = pd.DataFrame({
+                            "分析维度": chart_data["labels"],
+                            "统计数值": chart_data["values"]
+                        })
+                        
+                        st.divider()
+                        st.subheader("📊 智能数据可视化分析")
+                        
+                        # 2. 召唤 Plotly 画高级图表！
+                        fig = px.bar(
+                            df_chart, 
+                            x="分析维度", 
+                            y="统计数值", 
+                            color="分析维度",      # 自动给不同柱子分配高级配色！
+                            text_auto='.2f',      # 把具体数字直接显示在柱子上（保留两位小数）！
+                            template="plotly_dark" # 契合你当前黑色背景的高级暗黑主题
                         )
                         
-                        st.divider() # 画一条分割线
-                        st.subheader("📊 数据可视化视图")
+                        # 3. 隐藏多余的图例，让画面更干净
+                        fig.update_layout(showlegend=False)
                         
-                        # 调用 Streamlit 原生柱状图组件进行渲染！
-                        st.bar_chart(df_chart)
+                        # 4. 用 Streamlit 的高精度模式渲染 Plotly 图表
+                        st.plotly_chart(fig, use_container_width=True)
                         
                     except Exception as parse_error:
-                        st.warning(f"⚠️ 图表渲染解析失败，这可能是大模型生成的格式有误。")
+                        st.warning(f"⚠️ 图表渲染解析失败: {parse_error}")
+
 
             except Exception as e:
                 st.error(f"分析失败: {e}")
@@ -167,4 +181,5 @@ if user_question:
                 st.session_state.chat_history.append({"role": "assistant", "content": ai_answer})
             except Exception as e:
                 st.error(f"分析失败: {e}")
+
 
