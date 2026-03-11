@@ -89,7 +89,7 @@ class MultiAgentSystem:
 
     def node_data_expert(self):
         """数据专家智能体：负责 ReAct 闭环与 SQL 查数"""
-        llm_main = ChatOpenAI(api_key=self.api_key, base_url=self.base_url, model="Qwen/Qwen2.5-72B-Instruct", temperature=0)
+        llm_main = ChatOpenAI(api_key=self.api_key, base_url=self.base_url, model="deepseek-ai/DeepSeek-V3", temperature=0)
         agent_executor = create_sql_agent(llm=llm_main, db=self.db, agent_type="tool-calling", verbose=True, handle_parsing_errors=True)
         
         prompt = f"""
@@ -189,3 +189,4 @@ if user_question:
 
             except Exception as e:
                 st.error(f"系统运行异常: {e}")
+
